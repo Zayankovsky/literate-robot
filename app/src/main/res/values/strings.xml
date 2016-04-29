@@ -3,4 +3,12 @@
 
     <string name="open">Открыть</string>
     <string name="save">Сохранить</string>
+
+    <string name="blur">Размытие</string>
+    <string name="brightness">Яркость</string>
+    <string name="channel">Редакт. канал</string>
+
+    <string name="red">Красный</string>
+    <string name="green">Зелёный</string>
+    <string name="blue">Синий</string>
 </resources>

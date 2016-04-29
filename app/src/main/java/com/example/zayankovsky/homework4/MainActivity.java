@@ -18,12 +18,19 @@ import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v8.renderscript.Allocation;
+import android.support.v8.renderscript.Element;
+import android.support.v8.renderscript.Matrix3f;
 import android.support.v8.renderscript.RenderScript;
+import android.support.v8.renderscript.ScriptIntrinsicBlur;
+import android.support.v8.renderscript.ScriptIntrinsicColorMatrix;
 import android.util.AttributeSet;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.CompoundButton;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.SeekBar;
 
 import java.io.FileNotFoundException;
@@ -34,12 +41,27 @@ public class MainActivity extends AppCompatActivity {
     private Bitmap mBitmapIn;
     private Bitmap mBitmapOut;
     private CustomView mCustomView;
+    private SeekBar mSeekBar;
+    private RadioGroup mRadioGroupChannel;
 
     private Allocation mInAllocation;
     private Allocation mOutAllocation;
-    private ScriptC_saturation mScript;
 
-    private RenderScriptTask currentTask;
+    private ScriptIntrinsicBlur mScriptBlur;
+    private ScriptIntrinsicColorMatrix mScriptColorMatrix;
+
+    private final int MODE_BLUR = 0;
+    private final int MODE_BRIGHTNESS = 1;
+    private final int MODE_CHANNEL = 2;
+
+    private final int MODE_CHANNEL_RED = 3;
+    private final int MODE_CHANNEL_GREEN = 4;
+    private final int MODE_CHANNEL_BLUE = 5;
+
+    private int mFilterMode = MODE_BLUR;
+    private int mFilterChannelMode = MODE_CHANNEL_RED;
+
+    private RenderScriptTask mLatestTask;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,8 +76,7 @@ public class MainActivity extends AppCompatActivity {
         if (Intent.ACTION_SEND.equals(action) && type != null) {
             if (type.startsWith("image/")) {
                 Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-                handleSendImage(imageUri); // Handle single image being sent. Initialize UI
-                createScript(); // Create renderScript
+                handleImage(imageUri); // Handle single image being sent
             }
         }
     }
@@ -104,8 +125,7 @@ public class MainActivity extends AppCompatActivity {
         if (resultCode == RESULT_OK) {
             // Get the file's content URI from the incoming Intent
             Uri returnUri = returnIntent.getData();
-            handleSendImage(returnUri);
-            createScript();
+            handleImage(returnUri);
         }
     }
 
@@ -120,35 +140,43 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void handleSendImage(Uri imageUri) {
+    private void handleImage(Uri imageUri) {
         if (imageUri == null) {
             return;
         }
 
+        /*
+         * Initialize UI
+         */
+
+        //Set up custom view
         try {
             mBitmapIn = BitmapFactory.decodeStream(getContentResolver().openInputStream(imageUri));
         } catch (FileNotFoundException e) {
             return;
         }
-        mBitmapOut = Bitmap.createBitmap(mBitmapIn.getWidth(), mBitmapIn.getHeight(), mBitmapIn.getConfig());
+        mBitmapOut = mBitmapIn.copy(mBitmapIn.getConfig(), true);
 
         mCustomView = (CustomView) findViewById(R.id.customView);
         if (mCustomView == null) {
             return;
         }
-        mCustomView.setBitmap(mBitmapIn);
+        mCustomView.setBitmap(mBitmapOut);
         mCustomView.invalidate();
 
-        SeekBar seekbar = (SeekBar) findViewById(R.id.seekBar);
-        if (seekbar == null) {
+        //Set up seekBar
+        mSeekBar = (SeekBar) findViewById(R.id.seekBar);
+        if (mSeekBar == null) {
             return;
         }
-        seekbar.setOnSeekBarChangeListener(null);
-        seekbar.setVisibility(View.VISIBLE);
-        seekbar.setProgress(50);
-        seekbar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        mSeekBar.setVisibility(View.VISIBLE);
+        mSeekBar.setProgress(mFilterMode == MODE_BLUR ? 0 : 50);
+        mSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                updateImage(progress / 50f);
+                if (fromUser) {
+                    updateImage(progress);
+                }
             }
 
             @Override
@@ -157,11 +185,65 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+
+        //Setup effect selector
+        mRadioGroupChannel = (RadioGroup) findViewById(R.id.radioGroupChannel);
+        if (mRadioGroupChannel == null) {
+            return;
+        }
+
+        initRadioButton(R.id.radioBlur, MODE_BLUR);
+        initRadioButton(R.id.radioBrightness, MODE_BRIGHTNESS);
+        initRadioButton(R.id.radioChannel, MODE_CHANNEL);
+        initRadioButton(R.id.radioChannelRed, MODE_CHANNEL_RED);
+        initRadioButton(R.id.radioChannelGreen, MODE_CHANNEL_GREEN);
+        initRadioButton(R.id.radioChannelBlue, MODE_CHANNEL_BLUE);
+
+        RadioGroup radioGroup = (RadioGroup) findViewById(R.id.radioGroupFilter);
+        if (radioGroup == null) {
+            return;
+        }
+        radioGroup.setVisibility(View.VISIBLE);
+
+        /*
+         * Create renderScript
+         */
+        createScript();
+    }
+
+    private void initRadioButton(int id, final int filterMode) {
+        RadioButton radioButton = (RadioButton) findViewById(id);
+        if (radioButton == null) {
+            return;
+        }
+        radioButton.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    switch (filterMode) {
+                        case MODE_BLUR:case MODE_BRIGHTNESS:
+                            mRadioGroupChannel.setVisibility(View.GONE);
+                            mFilterMode = filterMode;
+                            break;
+                        case MODE_CHANNEL:
+                            mRadioGroupChannel.setVisibility(View.VISIBLE);
+                            mFilterMode = filterMode;
+                            break;
+                        case MODE_CHANNEL_RED:case MODE_CHANNEL_GREEN:case MODE_CHANNEL_BLUE:
+                            mFilterChannelMode = filterMode;
+                            break;
+                    }
+                    mBitmapIn = mBitmapOut.copy(mBitmapOut.getConfig(), true);
+                    mSeekBar.setProgress(filterMode == MODE_BLUR ? 0 : 50);
+                    createScript();
+                }
+            }
+        });
     }
 
     /*
      * Initialize RenderScript
-     * It creates RenderScript kernel that performs saturation manipulation.
+     * It creates RenderScript kernels that perform blur, brightness or color manipulation.
      */
     private void createScript() {
         //Initialize RS
@@ -171,8 +253,9 @@ public class MainActivity extends AppCompatActivity {
         mInAllocation = Allocation.createFromBitmap(mRS, mBitmapIn);
         mOutAllocation = Allocation.createFromBitmap(mRS, mBitmapOut);
 
-        //Load script
-        mScript = new ScriptC_saturation(mRS);
+        //Load scripts
+        mScriptBlur = ScriptIntrinsicBlur.create(mRS, Element.U8_4(mRS));
+        mScriptColorMatrix = ScriptIntrinsicColorMatrix.create(mRS, Element.U8_4(mRS));
     }
 
     /*
@@ -180,12 +263,79 @@ public class MainActivity extends AppCompatActivity {
     When AsyncTasks are piled up (typically in slow device with heavy kernel),
     Only the latest (and already started) task invokes RenderScript operation.
      */
-    private void updateImage(final float f) {
-        if (currentTask != null) {
-            currentTask.cancel(false);
+    private void updateImage(int progress) {
+        float value = getFilterParameter(progress);
+
+        if (mLatestTask != null) {
+            mLatestTask.cancel(false);
         }
-        currentTask = new RenderScriptTask();
-        currentTask.execute(f);
+        mLatestTask = new RenderScriptTask();
+
+        mLatestTask.execute(value);
+    }
+
+    /*
+    Convert seekBar progress parameter (0-100 in range) to parameter for each intrinsic filter.
+     */
+    private float getFilterParameter(int progress) {
+        float f = 0.f;
+        switch (mFilterMode) {
+            case MODE_BLUR:
+                return progress / 4f;
+            case MODE_BRIGHTNESS:
+                return (progress - 50) / 255f;
+            case MODE_CHANNEL:
+                return progress / 50f;
+        }
+        return f;
+
+    }
+
+    private void performFilter(float value) {
+        switch (mFilterMode) {
+            case MODE_BLUR:
+                if (value > 0) {
+                    //Set blur kernel size
+                    mScriptBlur.setRadius(value);
+
+                    // Invoke filter kernel
+                    mScriptBlur.setInput(mInAllocation);
+                    mScriptBlur.forEach(mOutAllocation);
+                } else {
+                    mOutAllocation.copyFrom(mInAllocation);
+                }
+                break;
+            case MODE_BRIGHTNESS:
+                mScriptColorMatrix.setColorMatrix(new Matrix3f(new float[]{1, 0, 0, 0, 1, 0, 0, 0, 1}));
+                mScriptColorMatrix.setAdd(value, value, value, 0);
+
+                // Invoke filter kernel
+                mScriptColorMatrix.forEach(mInAllocation, mOutAllocation);
+                break;
+            case MODE_CHANNEL:
+                if (value != 1) {
+                    switch (mFilterChannelMode) {
+                        case MODE_CHANNEL_RED:
+                            mScriptColorMatrix.setColorMatrix(new Matrix3f(new float[]{value, 0, 0, 0, 1, 0, 0, 0, 1}));
+                            break;
+                        case MODE_CHANNEL_GREEN:
+                            mScriptColorMatrix.setColorMatrix(new Matrix3f(new float[]{1, 0, 0, 0, value, 0, 0, 0, 1}));
+                            break;
+                        case MODE_CHANNEL_BLUE:
+                            mScriptColorMatrix.setColorMatrix(new Matrix3f(new float[]{1, 0, 0, 0, 1, 0, 0, 0, value}));
+                            break;
+                    }
+
+                    // Invoke filter kernel
+                    mScriptColorMatrix.forEach(mInAllocation, mOutAllocation);
+                } else {
+                    mOutAllocation.copyFrom(mInAllocation);
+                }
+                break;
+        }
+
+        // Copy to bitmap and invalidate custom view
+        mOutAllocation.copyTo(mBitmapOut);
     }
 
     /*
@@ -200,14 +350,7 @@ public class MainActivity extends AppCompatActivity {
             if (!isCancelled()) {
                 issued = true;
 
-                // Set global variable in RS
-                mScript.set_saturationValue(values[0]);
-
-                // Invoke saturation filter kernel
-                mScript.forEach_saturation(mInAllocation, mOutAllocation);
-
-                // Copy to bitmap and invalidate image view
-                mOutAllocation.copyTo(mBitmapOut);
+                performFilter(values[0]);
             }
             return null;
         }
