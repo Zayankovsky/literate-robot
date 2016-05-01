@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Зачётное задание №4</string>
+    <string name="app_name">Literate Robot</string>
 
     <string name="open">Открыть</string>
     <string name="save">Сохранить</string>

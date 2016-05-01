@@ -79,11 +79,9 @@ public class MainActivity extends AppCompatActivity {
         String action = intent.getAction();
         String type = intent.getType();
 
-        if (Intent.ACTION_SEND.equals(action) && type != null) {
-            if (type.startsWith("image/")) {
-                Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-                handleImage(imageUri); // Handle single image being sent
-            }
+        if (Intent.ACTION_SEND.equals(action) && type != null && type.startsWith("image/")) {
+            Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            handleImage(imageUri); // Handle single image being sent
         }
     }
 
@@ -145,7 +143,6 @@ public class MainActivity extends AppCompatActivity {
                     MediaStore.Images.Media.insertImage(getContentResolver(), mCustomView.getBitmap(), null, null);
                     break;
                 case MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION:
-                    // Register the listener with the Location Manager to receive location updates
                     requestLocationUpdate();
                     break;
             }
@@ -454,7 +451,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         private void setBitmap(Bitmap bitmap) {
-            this.mBitmap = bitmap;
+            mBitmap = bitmap;
             if (mFullRect != null) {
                 updateRect();
             }
