@@ -4,11 +4,16 @@ import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -37,6 +42,7 @@ import java.io.FileNotFoundException;
 
 public class MainActivity extends AppCompatActivity {
     private static final int MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE = 200;
+    private static final int MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 210;
 
     private Bitmap mBitmapIn;
     private Bitmap mBitmapOut;
@@ -131,11 +137,17 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String permissions[], @NonNull int[] grantResults) {
-        if (requestCode == MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE) {
-            // If request is cancelled, the result arrays are empty.
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // permission was granted, yay!
-                MediaStore.Images.Media.insertImage(getContentResolver(), mCustomView.getBitmap(), null, null);
+        // If request is cancelled, the result arrays are empty.
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            // permission was granted, yay!
+            switch (requestCode) {
+                case MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE:
+                    MediaStore.Images.Media.insertImage(getContentResolver(), mCustomView.getBitmap(), null, null);
+                    break;
+                case MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION:
+                    // Register the listener with the Location Manager to receive location updates
+                    requestLocationUpdate();
+                    break;
             }
         }
     }
@@ -209,6 +221,57 @@ public class MainActivity extends AppCompatActivity {
          * Create renderScript
          */
         createScript();
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                    this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                    MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION
+            );
+        } else {
+            requestLocationUpdate();
+        }
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private void requestLocationUpdate() {
+        // Acquire a reference to the system Location Manager
+        LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
+
+        // Define a listener that responds to location updates
+        LocationListener locationListener = new LocationListener() {
+            public void onLocationChanged(Location location) {
+                // Called when a new location is found by the location provider.
+                mCustomView.setLocation(location);
+                mCustomView.invalidate();
+            }
+
+            public void onStatusChanged(String provider, int status, Bundle extras) {}
+
+            public void onProviderEnabled(String provider) {}
+
+            public void onProviderDisabled(String provider) {}
+        };
+
+        // Register the listener with the Location Manager to receive location update
+        locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, locationListener, null);
+        locationManager.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, locationListener, null);
+    }
+
+    /*
+    Invoke AsyncTask and cancel previous task.
+    When AsyncTasks are piled up (typically in slow device with heavy kernel),
+    Only the latest (and already started) task invokes RenderScript operation.
+     */
+    private void updateImage(int progress) {
+        float value = getFilterParameter(progress);
+
+        if (mLatestTask != null) {
+            mLatestTask.cancel(false);
+        }
+        mLatestTask = new RenderScriptTask();
+
+        mLatestTask.execute(value);
     }
 
     private void initRadioButton(int id, final int filterMode) {
@@ -256,22 +319,6 @@ public class MainActivity extends AppCompatActivity {
         //Load scripts
         mScriptBlur = ScriptIntrinsicBlur.create(mRS, Element.U8_4(mRS));
         mScriptColorMatrix = ScriptIntrinsicColorMatrix.create(mRS, Element.U8_4(mRS));
-    }
-
-    /*
-    Invoke AsyncTask and cancel previous task.
-    When AsyncTasks are piled up (typically in slow device with heavy kernel),
-    Only the latest (and already started) task invokes RenderScript operation.
-     */
-    private void updateImage(int progress) {
-        float value = getFilterParameter(progress);
-
-        if (mLatestTask != null) {
-            mLatestTask.cancel(false);
-        }
-        mLatestTask = new RenderScriptTask();
-
-        mLatestTask.execute(value);
     }
 
     /*
@@ -338,6 +385,105 @@ public class MainActivity extends AppCompatActivity {
         mOutAllocation.copyTo(mBitmapOut);
     }
 
+    /**
+     * Custom view that is not necessary at all.
+     */
+    private static class CustomView extends View {
+        private Bitmap mBitmap;
+        private Rect mFullRect;
+        private RectF mRect;
+
+        private String mTextLat, mTextLong;
+        private final Paint mTextPaint;
+        private final int mTextHeight;
+
+        /**
+         * Class constructor taking a context and an attribute set.
+         * This constructor is used by the layout engine
+         * to construct a {@link CustomView} from a set of XML attributes.
+         *
+         * @param attrs   An attribute set which can contain
+         *                attributes inherited from {@link View}.
+         */
+        public CustomView(Context context, AttributeSet attrs) {
+            super(context, attrs);
+
+            mTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mTextPaint.setTextAlign(Paint.Align.RIGHT);
+
+            TypedArray typedArray = getContext().obtainStyledAttributes(
+                    android.R.style.TextAppearance_Small,
+                    new int[] {android.R.attr.textSize}
+            );
+            mTextPaint.setTextSize(typedArray.getDimensionPixelSize(0, 42));
+            typedArray.recycle();
+
+            String text = " -.0123456789:EILNadefginotuy";
+            Rect bounds = new Rect();
+            mTextPaint.getTextBounds(text, 0, text.length(), bounds);
+            mTextHeight = bounds.height();
+        }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+            super.onSizeChanged(w, h, oldw, oldh);
+
+            mFullRect = new Rect(getPaddingLeft(), getPaddingTop(),
+                    w - getPaddingRight(), h - getPaddingBottom() - 2 * mTextHeight);
+            if (mBitmap != null) {
+                updateRect();
+            }
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+
+            if (mRect != null) {
+                canvas.drawBitmap(mBitmap, null, mRect, null);
+
+                if (mTextLat != null) {
+                    canvas.drawText(mTextLat, mRect.right, mRect.bottom + mTextHeight, mTextPaint);
+                    canvas.drawText(mTextLong, mRect.right, mRect.bottom + 2 * mTextHeight, mTextPaint);
+                }
+            }
+        }
+
+        private Bitmap getBitmap() {
+            return mBitmap;
+        }
+
+        private void setBitmap(Bitmap bitmap) {
+            this.mBitmap = bitmap;
+            if (mFullRect != null) {
+                updateRect();
+            }
+        }
+
+        private void setLocation(Location location) {
+            mTextLat = "Latitude: " + location.getLatitude();
+            mTextLong = "Longitude: " + location.getLongitude();
+        }
+
+        private void updateRect() {
+            int fullWidth = mFullRect.width();
+            int fullHeight = mFullRect.height();
+
+            int bitmapWidth = mBitmap.getWidth();
+            int bitmapHeight = mBitmap.getHeight();
+
+            int value_1 = fullWidth * bitmapHeight;
+            int value_2 = fullHeight * bitmapWidth;
+
+            mRect = new RectF(mFullRect);
+            if (value_1 > value_2) {
+                mRect.inset((fullWidth - (float) value_2 / bitmapHeight) / 2, 0);
+            } else if (value_1 < value_2) {
+                mRect.inset(0, (fullHeight - (float) value_1 / bitmapWidth) / 2);
+            }
+        }
+    }
+
     /*
      * In the AsyncTask, it invokes RenderScript intrinsics to do a filtering.
      * After the filtering is done, an operation blocks at Allocation.copyTo() in AsyncTask thread.
@@ -369,75 +515,6 @@ public class MainActivity extends AppCompatActivity {
 
         protected void onCancelled(Void result) {
             updateView();
-        }
-    }
-
-    /**
-     * Custom view that is not necessary at all.
-     */
-    private static class CustomView extends View {
-        private Bitmap bitmap;
-        private Rect fullRect;
-        private RectF rect;
-
-        /**
-         * Class constructor taking a context and an attribute set.
-         * This constructor is used by the layout engine
-         * to construct a {@link CustomView} from a set of XML attributes.
-         *
-         * @param attrs   An attribute set which can contain
-         *                attributes inherited from {@link View}.
-         */
-        public CustomView(Context context, AttributeSet attrs) {
-            super(context, attrs);
-        }
-
-        @Override
-        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-            super.onSizeChanged(w, h, oldw, oldh);
-
-            fullRect = new Rect(getPaddingLeft(), getPaddingTop(), w - getPaddingRight(), h - getPaddingBottom());
-            if (bitmap != null) {
-                updateRect();
-            }
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-
-            if (rect != null) {
-                canvas.drawBitmap(bitmap, null, rect, null);
-            }
-        }
-
-        private Bitmap getBitmap() {
-            return bitmap;
-        }
-
-        private void setBitmap(Bitmap bitmap) {
-            this.bitmap = bitmap;
-            if (fullRect != null) {
-                updateRect();
-            }
-        }
-
-        private void updateRect() {
-            int fullWidth = fullRect.width();
-            int fullHeight = fullRect.height();
-
-            int bitmapWidth = bitmap.getWidth();
-            int bitmapHeight = bitmap.getHeight();
-
-            int value_1 = fullWidth * bitmapHeight;
-            int value_2 = fullHeight * bitmapWidth;
-
-            rect = new RectF(fullRect);
-            if (value_1 > value_2) {
-                rect.inset((fullWidth - (float) value_2 / bitmapHeight) / 2, 0);
-            } else if (value_1 < value_2) {
-                rect.inset(0, (fullHeight - (float) value_1 / bitmapWidth) / 2);
-            }
         }
     }
 }
