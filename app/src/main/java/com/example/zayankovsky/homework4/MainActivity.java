@@ -79,8 +79,8 @@ public class MainActivity extends AppCompatActivity {
         String action = intent.getAction();
         String type = intent.getType();
 
-        if (Intent.ACTION_SEND.equals(action) && type != null && type.startsWith("image/")) {
-            Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (Intent.ACTION_VIEW.equals(action) && type != null && type.startsWith("image/")) {
+            Uri imageUri = intent.getData();
             handleImage(imageUri); // Handle single image being sent
         }
     }
